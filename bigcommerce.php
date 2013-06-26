@@ -1,5 +1,273 @@
 <?php
 namespace Bigcommerce\Api {
+    class Connection
+    {
+        private $curl;
+        private $headers = array();
+        private $responseHeaders = array();
+        private $responseStatusLine;
+        private $responseBody;
+        private $failOnError = false;
+        private $followLocation = false;
+        private $maxRedirects = 20;
+        private $redirectsFollowed = 0;
+        private $lastError = false;
+        private $errorCode;
+        private $useXml = false;
+        public function __construct()
+        {
+            $this->curl = curl_init();
+            curl_setopt($this->curl, CURLOPT_HEADERFUNCTION, array($this, 'parseHeader'));
+            curl_setopt($this->curl, CURLOPT_WRITEFUNCTION, array($this, 'parseBody'));
+            $this->setCipher('rsa_rc4_128_sha');
+            if (!ini_get('open_basedir')) {
+                curl_setopt($this->curl, CURLOPT_FOLLOWLOCATION, true);
+            } else {
+                $this->followLocation = true;
+            }
+        }
+        public function useXml($option = true)
+        {
+            $this->useXml = $option;
+        }
+        public function failOnError($option = true)
+        {
+            $this->failOnError = $option;
+        }
+        public function authenticate($username, $password)
+        {
+            curl_setopt($this->curl, CURLOPT_USERPWD, "{$username}:{$password}");
+        }
+        public function setTimeout($timeout)
+        {
+            curl_setopt($this->curl, CURLOPT_TIMEOUT, $timeout);
+            curl_setopt($this->curl, CURLOPT_CONNECTTIMEOUT, $timeout);
+        }
+        public function useProxy($server, $port = false)
+        {
+            curl_setopt($this->curl, CURLOPT_PROXY, $server);
+            if ($port) {
+                curl_setopt($this->curl, CURLOPT_PROXYPORT, $port);
+            }
+        }
+        public function verifyPeer($option = false)
+        {
+            curl_setopt($this->curl, CURLOPT_SSL_VERIFYPEER, $option);
+        }
+        public function setCipher($cipher = 'rsa_rc4_128_sha')
+        {
+            curl_setopt($this->curl, CURLOPT_SSL_CIPHER_LIST, $cipher);
+        }
+        public function addHeader($header, $value)
+        {
+            $this->headers[$header] = "{$header}: {$value}";
+        }
+        private function getContentType()
+        {
+            return $this->useXml ? 'application/xml' : 'application/json';
+        }
+        private function initializeRequest()
+        {
+            $this->isComplete = false;
+            $this->responseBody = '';
+            $this->responseHeaders = array();
+            $this->lastError = false;
+            $this->addHeader('Accept', $this->getContentType());
+            curl_setopt($this->curl, CURLOPT_HTTPHEADER, $this->headers);
+        }
+        private function handleResponse()
+        {
+            if (curl_errno($this->curl)) {
+                throw new NetworkError(curl_error($this->curl), curl_errno($this->curl));
+            }
+            $body = $this->useXml ? $this->getBody() : json_decode($this->getBody());
+            $status = $this->getStatus();
+            if ($status >= 400 && $status <= 499) {
+                if ($this->failOnError) {
+                    throw new ClientError($body, $status);
+                } else {
+                    $this->lastError = $body;
+                    return false;
+                }
+            } elseif ($status >= 500 && $status <= 599) {
+                if ($this->failOnError) {
+                    throw new ServerError($body, $status);
+                } else {
+                    $this->lastError = $body;
+                    return false;
+                }
+            }
+            if ($this->followLocation) {
+                $this->followRedirectPath();
+            }
+            return $body;
+        }
+        public function getLastError()
+        {
+            return $this->lastError;
+        }
+        private function followRedirectPath()
+        {
+            $this->redirectsFollowed++;
+            if ($this->getStatus() == 301 || $this->getStatus() == 302) {
+                if ($this->redirectsFollowed < $this->maxRedirects) {
+                    $location = $this->getHeader('Location');
+                    $forwardTo = parse_url($location);
+                    if (isset($forwardTo['scheme']) && isset($forwardTo['host'])) {
+                        $url = $location;
+                    } else {
+                        $forwardFrom = parse_url(curl_getinfo($this->curl, CURLINFO_EFFECTIVE_URL));
+                        $url = $forwardFrom['scheme'] . '://' . $forwardFrom['host'] . $location;
+                    }
+                    $this->get($url);
+                } else {
+                    $errorString = 'Too many redirects when trying to follow location.';
+                    throw new NetworkError($errorString, CURLE_TOO_MANY_REDIRECTS);
+                }
+            } else {
+                $this->redirectsFollowed = 0;
+            }
+        }
+        public function get($url, $query = false)
+        {
+            $this->initializeRequest();
+            if (is_array($query)) {
+                $url .= '?' . http_build_query($query);
+            }
+            curl_setopt($this->curl, CURLOPT_CUSTOMREQUEST, 'GET');
+            curl_setopt($this->curl, CURLOPT_URL, $url);
+            curl_setopt($this->curl, CURLOPT_HTTPGET, true);
+            curl_exec($this->curl);
+            return $this->handleResponse();
+        }
+        public function post($url, $body)
+        {
+            $this->addHeader('Content-Type', $this->getContentType());
+            if (!is_string($body)) {
+                $body = json_encode($body);
+            }
+            $this->initializeRequest();
+            curl_setopt($this->curl, CURLOPT_CUSTOMREQUEST, 'POST');
+            curl_setopt($this->curl, CURLOPT_URL, $url);
+            curl_setopt($this->curl, CURLOPT_POST, true);
+            curl_setopt($this->curl, CURLOPT_POSTFIELDS, $body);
+            curl_exec($this->curl);
+            return $this->handleResponse();
+        }
+        public function head($url)
+        {
+            $this->initializeRequest();
+            curl_setopt($this->curl, CURLOPT_CUSTOMREQUEST, 'HEAD');
+            curl_setopt($this->curl, CURLOPT_URL, $url);
+            curl_setopt($this->curl, CURLOPT_NOBODY, true);
+            curl_exec($this->curl);
+            return $this->handleResponse();
+        }
+        public function put($url, $body)
+        {
+            $this->addHeader('Content-Type', $this->getContentType());
+            if (!is_string($body)) {
+                $body = json_encode($body);
+            }
+            $this->initializeRequest();
+            $handle = tmpfile();
+            fwrite($handle, $body);
+            fseek($handle, 0);
+            curl_setopt($this->curl, CURLOPT_INFILE, $handle);
+            curl_setopt($this->curl, CURLOPT_INFILESIZE, strlen($body));
+            curl_setopt($this->curl, CURLOPT_CUSTOMREQUEST, 'PUT');
+            curl_setopt($this->curl, CURLOPT_URL, $url);
+            curl_setopt($this->curl, CURLOPT_PUT, true);
+            curl_exec($this->curl);
+            return $this->handleResponse();
+        }
+        public function delete($url)
+        {
+            $this->initializeRequest();
+            curl_setopt($this->curl, CURLOPT_CUSTOMREQUEST, 'DELETE');
+            curl_setopt($this->curl, CURLOPT_URL, $url);
+            curl_exec($this->curl);
+            return $this->handleResponse();
+        }
+        private function parseBody($curl, $body)
+        {
+            $this->responseBody .= $body;
+            return strlen($body);
+        }
+        private function parseHeader($curl, $headers)
+        {
+            if (!$this->responseStatusLine && strpos($headers, 'HTTP/') === 0) {
+                $this->responseStatusLine = $headers;
+            } else {
+                $parts = explode(': ', $headers);
+                if (isset($parts[1])) {
+                    $this->responseHeaders[$parts[0]] = trim($parts[1]);
+                }
+            }
+            return strlen($headers);
+        }
+        public function getStatus()
+        {
+            return curl_getinfo($this->curl, CURLINFO_HTTP_CODE);
+        }
+        public function getStatusMessage()
+        {
+            return $this->responseStatusLine;
+        }
+        public function getBody()
+        {
+            return $this->responseBody;
+        }
+        public function getHeader($header)
+        {
+            if (array_key_exists($header, $this->responseHeaders)) {
+                return $this->responseHeaders[$header];
+            }
+        }
+        public function getHeaders()
+        {
+            return $this->responseHeaders;
+        }
+        public function __destruct()
+        {
+            curl_close($this->curl);
+        }
+    }
+}
+namespace Bigcommerce\Api {
+    class Error extends \Exception
+    {
+        public function __construct($message, $code)
+        {
+            if (is_array($message)) {
+                $message = $message[0]->message;
+            }
+            parent::__construct($message, $code);
+        }
+    }
+}
+namespace Bigcommerce\Api {
+    class ClientError extends Error
+    {
+        public function __toString()
+        {
+            return "Client Error ({$this->code}): " . $this->message;
+        }
+    }
+}
+namespace Bigcommerce\Api {
+    class ServerError extends Error
+    {
+        
+    }
+}
+namespace Bigcommerce\Api {
+    class NetworkError extends Error
+    {
+        
+    }
+}
+namespace Bigcommerce\Api {
     class Client
     {
         private static $store_url;
@@ -24,6 +292,7 @@ namespace Bigcommerce\Api {
             self::$api_key = $settings['api_key'];
             self::$store_url = rtrim($settings['store_url'], '/');
             self::$api_path = self::$store_url . self::$path_prefix;
+            self::$connection = false;
         }
         public static function failOnError($option = true)
         {
@@ -98,12 +367,13 @@ namespace Bigcommerce\Api {
             if ($object == false || is_string($object)) {
                 return $object;
             }
-            self::$resource = $resource;
+            $baseResource = __NAMESPACE__ . '\\' . $resource;
+            self::$resource = class_exists($baseResource) ? $baseResource : 'Bigcommerce\\Api\\Resources\\' . $resource;
             return array_map(array('self', 'mapCollectionObject'), $object);
         }
         private static function mapCollectionObject($object)
         {
-            $class = 'Bigcommerce\\Api\\Resources\\' . self::$resource;
+            $class = self::$resource;
             return new $class($object);
         }
         private static function mapResource($resource, $object)
@@ -111,7 +381,8 @@ namespace Bigcommerce\Api {
             if ($object == false || is_string($object)) {
                 return $object;
             }
-            $class = 'Bigcommerce\\Api\\Resources\\' . $resource;
+            $baseResource = __NAMESPACE__ . '\\' . $resource;
+            $class = class_exists($baseResource) ? $baseResource : 'Bigcommerce\\Api\\Resources\\' . $resource;
             return new $class($object);
         }
         private static function mapCount($object)
@@ -160,6 +431,10 @@ namespace Bigcommerce\Api {
             $filter = Filter::create($filter);
             return self::getCollection('/options' . $filter->toQuery(), 'Option');
         }
+        public static function createOptions($object)
+        {
+            return self::createResource('/options', $object);
+        }
         public static function getOptionsCount()
         {
             return self::getCount('/options/count');
@@ -197,7 +472,7 @@ namespace Bigcommerce\Api {
         }
         public static function createCategory($object)
         {
-            return self::createResource('/categories', $object);
+            return self::createResource('/categories/', $object);
         }
         public static function updateCategory($id, $object)
         {
@@ -220,6 +495,7 @@ namespace Bigcommerce\Api {
         public static function getBrand($id)
         {
             return self::getResource('/brands/' . $id, 'Brand');
+<<<<<<< HEAD
         }
         public static function createBrand($object)
         {
@@ -395,236 +671,142 @@ namespace Bigcommerce\Api {
             } else {
                 $this->followLocation = true;
             }
+=======
+>>>>>>> upstream/master
         }
-        public function useXml($option = true)
+        public static function createBrand($object)
         {
-            $this->useXml = $option;
+            return self::createResource('/brands', $object);
         }
-        public function failOnError($option = true)
+        public static function updateBrand($id, $object)
         {
-            $this->failOnError = $option;
+            return self::updateResource('/brands/' . $id, $object);
         }
-        public function authenticate($username, $password)
+        public static function deleteBrand($id)
         {
-            curl_setopt($this->curl, CURLOPT_USERPWD, "{$username}:{$password}");
+            return self::deleteResource('/brands/' . $id);
         }
-        public function setTimeout($timeout)
+        public static function getOrders($filter = false)
         {
-            curl_setopt($this->curl, CURLOPT_TIMEOUT, $timeout);
-            curl_setopt($this->curl, CURLOPT_CONNECTTIMEOUT, $timeout);
+            $filter = Filter::create($filter);
+            return self::getCollection('/orders' . $filter->toQuery(), 'Order');
         }
-        public function useProxy($server, $port = false)
+        public static function getOrdersCount()
         {
-            curl_setopt($this->curl, CURLOPT_PROXY, $server);
-            if ($port) {
-                curl_setopt($this->curl, CURLOPT_PROXYPORT, $port);
-            }
+            return self::getCount('/orders/count');
         }
-        public function verifyPeer($option = false)
+        public static function getOrder($id)
         {
-            curl_setopt($this->curl, CURLOPT_SSL_VERIFYPEER, $option);
+            return self::getResource('/orders/' . $id, 'Order');
         }
-        public function setCipher($cipher = 'rsa_rc4_128_sha')
+        public static function deleteOrder($id)
         {
-            curl_setopt($this->curl, CURLOPT_SSL_CIPHER_LIST, $cipher);
+            return self::deleteResource('/orders/' . $id);
         }
-        public function addHeader($header, $value)
+        public static function createOrder($object)
         {
-            $this->headers[$header] = "{$header}: {$value}";
+            return self::createResource('/orders', $object);
         }
-        private function getContentType()
+        public static function getCustomers($filter = false)
         {
-            return $this->useXml ? 'application/xml' : 'application/json';
+            $filter = Filter::create($filter);
+            return self::getCollection('/customers' . $filter->toQuery(), 'Customer');
         }
-        private function initializeRequest()
+        public static function getCustomersCount()
         {
-            $this->isComplete = false;
-            $this->responseBody = '';
-            $this->responseHeaders = array();
-            $this->lastError = false;
-            $this->addHeader('Accept', $this->getContentType());
-            curl_setopt($this->curl, CURLOPT_HTTPHEADER, $this->headers);
+            return self::getCount('/customers/count');
         }
-        private function handleResponse()
+        public static function deleteCustomers($filter = false)
         {
-            if (curl_errno($this->curl)) {
-                throw new NetworkError(curl_error($this->curl), curl_errno($this->curl));
-            }
-            $body = $this->useXml ? $this->getBody() : json_decode($this->getBody());
-            $status = $this->getStatus();
-            if ($status >= 400 && $status <= 499) {
-                if ($this->failOnError) {
-                    throw new ClientError($body, $status);
-                } else {
-                    $this->lastError = $body;
+            $filter = Filter::create($filter);
+            return self::deleteResource('/customers' . $filter->toQuery());
+        }
+        public static function getCustomer($id)
+        {
+            return self::getResource('/customers/' . $id, 'Customer');
+        }
+        public static function createCustomer($object)
+        {
+            return self::createResource('/customers', $object);
+        }
+        public static function updateCustomer($id, $object)
+        {
+            return self::updateResource('/customers/' . $id, $object);
+        }
+        public static function deleteCustomer($id)
+        {
+            return self::deleteResource('/customers/' . $id);
+        }
+        public static function getCustomerAddresses($id)
+        {
+            return self::getCollection('/customers/' . $id . '/addresses', 'Address');
+        }
+        public static function getOptionSets($filter = false)
+        {
+            $filter = Filter::create($filter);
+            return self::getCollection('/optionsets' . $filter->toQuery(), 'OptionSet');
+        }
+        public static function createOptionsets($object)
+        {
+            return self::createResource('/optionsets', $object);
+        }
+        public static function createOptionsets_Options($object, $id)
+        {
+            return self::createResource('/optionsets/' . $id . '/options', $object);
+        }
+        public static function getOptionSetsCount()
+        {
+            return self::getCount('/optionsets/count');
+        }
+        public static function getOptionSet($id)
+        {
+            return self::getResource('/optionsets/' . $id, 'OptionSet');
+        }
+        public static function getOrderStatuses()
+        {
+            return self::getCollection('/orderstatuses', 'OrderStatus');
+        }
+        public static function getSkus($filter = false)
+        {
+            $filter = Filter::create($filter);
+            return self::getCollection('/products/skus' . $filter->toQuery(), 'Sku');
+        }
+        public static function createSku($object)
+        {
+            return self::createResource('/product/skus', $object);
+        }
+        public static function updateSku($id, $object)
+        {
+            return self::updateResource('/product/skus' . $id, $object);
+        }
+        public static function getCoupons($filter = false)
+        {
+            $filter = Filter::create($filter);
+            return self::getCollection('/coupons' . $filter->toQuery(), 'Sku');
+        }
+        public static function createCoupon($object)
+        {
+            return self::createResource('/coupons', $object);
+        }
+        public static function updateCoupon($id, $object)
+        {
+            return self::updateResource('/coupons' . $id, $object);
+        }
+        public static function getRequestLogs()
+        {
+            return self::getCollection('/requestlogs');
+        }
+        public static function getRequestsRemaining()
+        {
+            $limit = self::connection()->getHeader('X-BC-ApiLimit-Remaining');
+            if (!$limit) {
+                $result = self::getTime();
+                if (!$result) {
                     return false;
                 }
-            } elseif ($status >= 500 && $status <= 599) {
-                if ($this->failOnError) {
-                    throw new ServerError($body, $status);
-                } else {
-                    $this->lastError = $body;
-                    return false;
-                }
+                $limit = self::connection()->getHeader('X-BC-ApiLimit-Remaining');
             }
-            if ($this->followLocation) {
-                $this->followRedirectPath();
-            }
-            return $body;
-        }
-        public function getLastError()
-        {
-            return $this->lastError;
-        }
-        private function followRedirectPath()
-        {
-            $this->redirectsFollowed++;
-            if ($this->getStatus() == 301 || $this->getStatus() == 302) {
-                if ($this->redirectsFollowed < $this->maxRedirects) {
-                    $location = $this->getHeader('Location');
-                    $forwardTo = parse_url($location);
-                    if (isset($forwardTo['scheme']) && isset($forwardTo['host'])) {
-                        $url = $location;
-                    } else {
-                        $forwardFrom = parse_url(curl_getinfo($this->curl, CURLINFO_EFFECTIVE_URL));
-                        $url = $forwardFrom['scheme'] . '://' . $forwardFrom['host'] . $location;
-                    }
-                    $this->get($url);
-                } else {
-                    $errorString = 'Too many redirects when trying to follow location.';
-                    throw new NetworkError($errorString, CURLE_TOO_MANY_REDIRECTS);
-                }
-            } else {
-                $this->redirectsFollowed = 0;
-            }
-        }
-        public function get($url, $query = false)
-        {
-            $this->initializeRequest();
-            if (is_array($query)) {
-                $url .= '?' . http_build_query($query);
-            }
-            curl_setopt($this->curl, CURLOPT_CUSTOMREQUEST, 'GET');
-            curl_setopt($this->curl, CURLOPT_URL, $url);
-            curl_setopt($this->curl, CURLOPT_HTTPGET, true);
-            curl_exec($this->curl);
-            return $this->handleResponse();
-        }
-        public function post($url, $body)
-        {
-            $this->addHeader('Content-Type', $this->getContentType());
-            if (!is_string($body)) {
-                $body = json_encode($body);
-            }
-            if (strstr($url, '/products')) {
-                echo $body;
-            }
-            $this->initializeRequest();
-            curl_setopt($this->curl, CURLOPT_CUSTOMREQUEST, 'POST');
-            curl_setopt($this->curl, CURLOPT_URL, $url);
-            curl_setopt($this->curl, CURLOPT_POST, true);
-            curl_setopt($this->curl, CURLOPT_POSTFIELDS, $body);
-            curl_exec($this->curl);
-            return $this->handleResponse();
-        }
-        public function head($url)
-        {
-            $this->initializeRequest();
-            curl_setopt($this->curl, CURLOPT_CUSTOMREQUEST, 'HEAD');
-            curl_setopt($this->curl, CURLOPT_URL, $url);
-            curl_setopt($this->curl, CURLOPT_NOBODY, true);
-            curl_exec($this->curl);
-            return $this->handleResponse();
-        }
-        public function put($url, $body)
-        {
-            $this->addHeader('Content-Type', $this->getContentType());
-            if (!is_string($body)) {
-                $body = json_encode($body);
-            }
-            $this->initializeRequest();
-            $handle = tmpfile();
-            fwrite($handle, $body);
-            fseek($handle, 0);
-            curl_setopt($this->curl, CURLOPT_INFILE, $handle);
-            curl_setopt($this->curl, CURLOPT_INFILESIZE, strlen($body));
-            curl_setopt($this->curl, CURLOPT_CUSTOMREQUEST, 'PUT');
-            curl_setopt($this->curl, CURLOPT_URL, $url);
-            curl_setopt($this->curl, CURLOPT_PUT, true);
-            curl_exec($this->curl);
-            return $this->handleResponse();
-        }
-        public function delete($uri)
-        {
-            $this->initializeRequest();
-            curl_setopt($this->curl, CURLOPT_CUSTOMREQUEST, 'DELETE');
-            curl_setopt($this->curl, CURLOPT_URL, $uri);
-            curl_exec($this->curl);
-            return $this->handleResponse();
-        }
-        private function parseBody($curl, $body)
-        {
-            $this->responseBody .= $body;
-            return strlen($body);
-        }
-        private function parseHeader($curl, $headers)
-        {
-            if (!$this->responseStatusLine && strpos($headers, 'HTTP/') === 0) {
-                $this->responseStatusLine = $headers;
-            } else {
-                $parts = explode(': ', $headers);
-                if (isset($parts[1])) {
-                    $this->responseHeaders[$parts[0]] = trim($parts[1]);
-                }
-            }
-            return strlen($headers);
-        }
-        public function getStatus()
-        {
-            return curl_getinfo($this->curl, CURLINFO_HTTP_CODE);
-        }
-        public function getStatusMessage()
-        {
-            return $this->responseStatusLine;
-        }
-        public function getBody()
-        {
-            return $this->responseBody;
-        }
-        public function getHeader($header)
-        {
-            if (array_key_exists($header, $this->responseHeaders)) {
-                return $this->responseHeaders[$header];
-            }
-        }
-        public function getHeaders()
-        {
-            return $this->responseHeaders;
-        }
-        public function __destruct()
-        {
-            curl_close($this->curl);
-        }
-    }
-}
-namespace Bigcommerce\Api {
-    class Error extends \Exception
-    {
-        public function __construct($message, $code)
-        {
-            if (is_array($message)) {
-                $message = $message[0]->message;
-            }
-            parent::__construct($message, $code);
-        }
-    }
-}
-namespace Bigcommerce\Api {
-    class ClientError extends Error
-    {
-        public function __toString()
-        {
-            return "Client Error ({$this->code}): " . $this->message;
+            return intval($limit);
         }
     }
 }
@@ -658,12 +840,6 @@ namespace Bigcommerce\Api {
     }
 }
 namespace Bigcommerce\Api {
-    class NetworkError extends Error
-    {
-        
-    }
-}
-namespace Bigcommerce\Api {
     class Resource
     {
         protected $fields;
@@ -677,7 +853,7 @@ namespace Bigcommerce\Api {
                 $object = isset($object[0]) ? $object[0] : false;
             }
             $this->fields = $object ? $object : new \stdClass();
-            $this->id = $object ? $object->id : 0;
+            $this->id = $object && isset($object->id) ? $object->id : 0;
         }
         public function __get($field)
         {
@@ -689,6 +865,10 @@ namespace Bigcommerce\Api {
         public function __set($field, $value)
         {
             $this->fields->{$field} = $value;
+        }
+        public function __isset($field)
+        {
+            return isset($this->fields->{$field});
         }
         public function getCreateFields()
         {
@@ -1165,11 +1345,5 @@ namespace Bigcommerce\Api\Resources {
         {
             Client::updateResource('/products/' . $this->product_id . '/skus/' . $this->sku_id . '/options/' . $this->id, $this->getUpdateFields());
         }
-    }
-}
-namespace Bigcommerce\Api {
-    class ServerError extends Error
-    {
-        
     }
 }

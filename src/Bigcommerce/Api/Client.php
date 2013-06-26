@@ -463,7 +463,7 @@ class Client
 	 */
 	public static function createCategory($object)
 	{
-		return self::createResource('/categories', $object);
+		return self::createResource('/categories/', $object);
 	}
 
 	/**
@@ -595,6 +595,15 @@ class Client
 	public static function deleteOrder($id)
 	{
 		return self::deleteResource('/orders/' . $id);
+	}
+
+	/** 
+	* Create an order
+	**/
+
+	public static function createOrder($object)
+	{
+		return self::createResource('/orders', $object);
 	}
 
 	/**
