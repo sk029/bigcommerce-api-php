@@ -8,8 +8,32 @@ use Bigcommerce\Api\Client;
 /**
  * A custom field on a product.
  */
-class CustomField extends Resource
+class ProductCustomField extends Resource
 {
 
+	protected $ignoreOnCreate = array(
+		'id',
+		'product_id'
+	);
+
+	protected $ignoreOnUpdate = array(
+		'id',
+		'product_id'
+	);
+
+	public function create()
+	{
+	    return Client::createResource('/products/' . $this->product_id . '/customfields', $this->getCreateFields());
+	}
+
+	public function update()
+	{
+	    Client::updateResource('/products/' . $this->product_id . '/customfields/' . $this->id, $this->getUpdateFields());
+	}
+
+	public function delete()
+	{
+	    Client::deleteResource('/products/' . $this->product_id . '/customfields/' . $this->id);
+	}
 }
 

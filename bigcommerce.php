@@ -258,13 +258,13 @@ namespace Bigcommerce\Api {
 namespace Bigcommerce\Api {
     class ServerError extends Error
     {
-        
+
     }
 }
 namespace Bigcommerce\Api {
     class NetworkError extends Error
     {
-        
+
     }
 }
 namespace Bigcommerce\Api {
@@ -400,12 +400,42 @@ namespace Bigcommerce\Api {
             }
             return new \DateTime("@{$response->time}");
         }
-        public static function getProducts($filter=false)
+        public static function getProducts($filter = false)
         {
             $filter = Filter::create($filter);
             return self::getCollection('/products' . $filter->toQuery(), 'Product');
         }
-        public static function getProductsCount($filter=false)
+        public static function getProductImages($id)
+        {
+            return self::getResource('/products/' . $id . '/images/', 'ProductImage');
+        }
+
+        public static function getProductCustomFields($id)
+        {
+            return self::getCollection('/products/' . $id . '/customfields/', 'ProductCustomField');
+        }
+
+        public static function getProductCustomField($product_id, $id)
+        {
+            return self::getResource('/products/' . $product_id . '/customfields/' . $id, 'ProductCustomField');
+        }
+
+        public static function createProductCustomField($product_id, $object)
+        {
+            return self::createResource('/products/' . $product_id . '/customfields', $object);
+        }
+
+        public static function updateProductCustomField($product_id, $id, $object)
+        {
+            return self::updateResource('/products/' . $product_id . '/customfields/' . $id, $object);
+        }
+
+        public static function deleteProductCustomField($product_id, $id)
+        {
+            return self::deleteResource('/products/' . $product_id . '/customfields/' . $id);
+        }
+
+        public static function getProductsCount($filter = false)
         {
             $filter = Filter::create($filter);
             return self::getCount('/products/count' . $filter->toQuery());
@@ -461,7 +491,7 @@ namespace Bigcommerce\Api {
             $filter = Filter::create($filter);
             return self::getCollection('/categories' . $filter->toQuery(), 'Category');
         }
-        public static function getCategoriesCount($filter=false)
+        public static function getCategoriesCount($filter = false)
         {
             $filter = Filter::create($filter);
             return self::getCount('/categories/count' . $filter->toQuery());
@@ -487,7 +517,7 @@ namespace Bigcommerce\Api {
             $filter = Filter::create($filter);
             return self::getCollection('/brands' . $filter->toQuery(), 'Brand');
         }
-        public static function getBrandsCount($filter=false)
+        public static function getBrandsCount($filter = false)
         {
             $filter = Filter::create($filter);
             return self::getCount('/brands/count' . $filter->toQuery());
@@ -495,6 +525,7 @@ namespace Bigcommerce\Api {
         public static function getBrand($id)
         {
             return self::getResource('/brands/' . $id, 'Brand');
+<<<<<<< HEAD
 <<<<<<< HEAD
         }
         public static function createBrand($object)
@@ -673,6 +704,8 @@ namespace Bigcommerce\Api {
             }
 =======
 >>>>>>> upstream/master
+=======
+>>>>>>> upstream/master
         }
         public static function createBrand($object)
         {
@@ -712,9 +745,10 @@ namespace Bigcommerce\Api {
             $filter = Filter::create($filter);
             return self::getCollection('/customers' . $filter->toQuery(), 'Customer');
         }
-        public static function getCustomersCount()
+        public static function getCustomersCount($filter = false)
         {
-            return self::getCount('/customers/count');
+            $filter = Filter::create($filter);
+            return self::getCount('/customers/count' . $filter->toQuery());
         }
         public static function deleteCustomers($filter = false)
         {
@@ -790,11 +824,16 @@ namespace Bigcommerce\Api {
         }
         public static function updateCoupon($id, $object)
         {
-            return self::updateResource('/coupons' . $id, $object);
+            return self::updateResource('/coupons/' . $id, $object);
         }
         public static function getRequestLogs()
         {
             return self::getCollection('/requestlogs');
+        }
+        public static function getStore()
+        {
+            $response = self::connection()->get(self::$api_path . '/store');
+            return $response;
         }
         public static function getRequestsRemaining()
         {
@@ -915,7 +954,7 @@ namespace Bigcommerce\Api\Resources {
     use Bigcommerce\Api\Client;
     class Address extends Resource
     {
-        
+
     }
 }
 namespace Bigcommerce\Api\Resources {
@@ -999,7 +1038,7 @@ namespace Bigcommerce\Api\Resources {
     use Bigcommerce\Api\Client;
     class DiscountRule extends Resource
     {
-        
+
     }
 }
 namespace Bigcommerce\Api\Resources {
@@ -1111,7 +1150,7 @@ namespace Bigcommerce\Api\Resources {
     use Bigcommerce\Api\Client;
     class OrderProduct extends Resource
     {
-        
+
     }
 }
 namespace Bigcommerce\Api\Resources {
@@ -1119,7 +1158,7 @@ namespace Bigcommerce\Api\Resources {
     use Bigcommerce\Api\Client;
     class OrderStatus extends Resource
     {
-        
+
     }
 }
 namespace Bigcommerce\Api\Resources {
@@ -1187,17 +1226,40 @@ namespace Bigcommerce\Api\Resources {
 namespace Bigcommerce\Api\Resources {
     use Bigcommerce\Api\Resource;
     use Bigcommerce\Api\Client;
-    class ConfigurableField extends Resource
+    class ProductConfigurableField extends Resource
     {
-        
+
     }
 }
 namespace Bigcommerce\Api\Resources {
     use Bigcommerce\Api\Resource;
     use Bigcommerce\Api\Client;
-    class CustomField extends Resource
+    class ProductCustomField extends Resource
     {
-        
+        protected $ignoreOnCreate = array(
+            'id',
+            'product_id'
+        );
+
+        protected $ignoreOnUpdate = array(
+            'id',
+            'product_id'
+        );
+
+        public function create()
+        {
+            return Client::createResource('/products/' . $this->product_id . '/customfields', $this->getCreateFields());
+        }
+
+        public function update()
+        {
+            Client::updateResource('/products/' . $this->product_id . '/customfields/' . $this->id, $this->getUpdateFields());
+        }
+
+        public function delete()
+        {
+            Client::deleteResource('/products/' . $this->product_id . '/customfields/' . $this->id);
+        }
     }
 }
 namespace Bigcommerce\Api\Resources {
@@ -1231,9 +1293,9 @@ namespace Bigcommerce\Api\Resources {
 namespace Bigcommerce\Api\Resources {
     use Bigcommerce\Api\Resource;
     use Bigcommerce\Api\Client;
-    class Video extends Resource
+    class ProductVideo extends Resource
     {
-        
+
     }
 }
 namespace Bigcommerce\Api\Resources {
@@ -1241,7 +1303,7 @@ namespace Bigcommerce\Api\Resources {
     use Bigcommerce\Api\Client;
     class RequestLog extends Resource
     {
-        
+
     }
 }
 namespace Bigcommerce\Api\Resources {

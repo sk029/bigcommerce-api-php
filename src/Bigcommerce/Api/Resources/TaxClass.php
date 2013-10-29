@@ -6,9 +6,9 @@ use Bigcommerce\Api\Resource;
 use Bigcommerce\Api\Client;
 
 /**
- * A product video.
+ * An option.
  */
-class ProductVideo extends Resource
+class TaxClass extends Resource
 {
 
 }
